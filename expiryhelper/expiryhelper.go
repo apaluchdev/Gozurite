@@ -1,6 +1,7 @@
 package expiryhelper
 
 import (
+	"log"
 	"sync"
 	"time"
 )
@@ -9,10 +10,16 @@ import (
 var pinExpiryMap = make(map[string]time.Time)
 var mu sync.Mutex
 
+func GetPinExpiryMap() map[string]time.Time {
+	return pinExpiryMap
+}
+
 func AddPinExpiry(pin string, hours int) {
 	mu.Lock()
 	defer mu.Unlock()
 	futureTime := time.Now().Add(time.Duration(hours) * time.Hour)
+
+	log.Printf("Adding pin %s with expiry time %s", pin, futureTime)
 	pinExpiryMap[pin] = futureTime
 }
 

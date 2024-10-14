@@ -1,7 +1,10 @@
 package main
 
 import (
+	"gozurite/blobclient"
+	"gozurite/expiryhelper"
 	"gozurite/routes"
+	"log"
 	"os"
 	"time"
 
@@ -11,6 +14,9 @@ import (
 
 func main() {
 	router := gin.Default()
+
+	// periodically check for expired pins and remove them
+	go CleanupExpiredPins()
 
 	// Configure CORS middleware with allowed origins, methods, and headers
 	router.Use(cors.New(cors.Config{
@@ -38,4 +44,27 @@ func main() {
 
 	// Start the server
 	router.Run(":" + port) // Listen and serve on the specified port
+}
+
+func CleanupExpiredPins() {
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		<-ticker.C
+		log.Println("Checking for expired pins...")
+		for pin, expiryTime := range expiryhelper.GetPinExpiryMap() {
+			if time.Now().After(expiryTime) {
+				log.Printf("Pin %s expired, removing it", pin)
+
+				// Delete the folder in the container and remove the pin from the expiry map
+				err := blobclient.DeleteFolderInContainer(blobclient.FILES_CONTAINER_NAME, pin)
+				if err != nil {
+					log.Printf("Error deleting folder %s: %v", pin, err)
+				}
+
+				expiryhelper.RemovePinExpiry(pin)
+			}
+		}
+	}
 }
