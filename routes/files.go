@@ -5,10 +5,12 @@ import (
 	"context"
 	"fmt"
 	"gozurite/blobclient"
+	"gozurite/expiryhelper"
 	"io"
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
 	"github.com/gin-gonic/gin"
@@ -18,18 +20,27 @@ func RegisterFileRoutes(router *gin.Engine) {
 	fileRoutes := router.Group("/file")
 	{
 		fileRoutes.GET("/query/:pin", queryFiles)
-		fileRoutes.POST("", uploadFile)
+		fileRoutes.GET("/query", queryFolders)
 		fileRoutes.GET("/:pin/:id", getFile)
+		fileRoutes.GET("/pin/:pin", getPinExpiry)
+		fileRoutes.POST("", uploadFile)
 		fileRoutes.DELETE("/:id", deleteFile)
+		fileRoutes.DELETE("/pin/:pin", expirePin)
 	}
 }
 
-func ensureContainerExists(blobClient *azblob.Client, containerName string) {
-	_, err := blobClient.CreateContainer(context.Background(), containerName, nil)
+func queryFolders(c *gin.Context) {
+	log.Default().Println("Querying folders...")
 
+	// Get the list of folders in the container
+	folders, err := blobclient.GetFoldersInContainer(blobclient.FILES_CONTAINER_NAME)
 	if err != nil {
-		log.Default().Println("Error creating container or container already exists: ", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
 	}
+
+	// Return the folder names as JSON
+	c.JSON(http.StatusOK, gin.H{"folders": folders})
 }
 
 func queryFiles(c *gin.Context) {
@@ -113,6 +124,13 @@ func uploadFile(c *gin.Context) {
 		return
 	}
 
+	// Check if the filename contains any invalid characters
+	chars := "<>:\"/\\|?*"
+	if strings.ContainsAny(filename, chars) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid character in filename"})
+		return
+	}
+
 	// Get the size of the file
 	fileSize := header.Size
 	fmt.Printf("File size: %d bytes\n", fileSize)
@@ -145,6 +163,21 @@ func uploadFile(c *gin.Context) {
 		return
 	}
 
+	// Get the expiry time for the pin
+	log.Default().Println("Checking for expiry time...")
+	expiryInHours := c.PostForm("expiryInHours")
+	if expiryInHours == "" {
+		log.Default().Println("Expiry not specified, using default of 8 hours")
+		expiryhelper.AddPinExpiry(pin, 8)
+	} else {
+		hours, err := strconv.Atoi(expiryInHours)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid expiry time"})
+			return
+		}
+		expiryhelper.AddPinExpiry(pin, hours)
+	}
+
 	c.JSON(http.StatusOK, gin.H{"message": "File uploaded successfully"})
 }
 
@@ -163,6 +196,27 @@ func getFile(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+}
+
+func expirePin(c *gin.Context) {
+	err := blobclient.DeleteFolderInContainer(blobclient.FILES_CONTAINER_NAME, c.Param("pin"))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	expiryhelper.RemovePinExpiry(c.Param("pin"))
+
+	c.JSON(200, gin.H{"message": "Pin expired, all files deleted"})
+}
+
+func getPinExpiry(c *gin.Context) {
+	expiryTime, exists := expiryhelper.GetPinExpiry(c.Param("pin"))
+	if !exists {
+		c.JSON(http.StatusNotFound, gin.H{"error": "PIN not found"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"expiryTime": expiryTime})
 }
 
 func deleteFile(c *gin.Context) {

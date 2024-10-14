@@ -23,8 +23,10 @@ RUN go build -o main .
 # Stage 2: Create a lightweight container to run the app
 FROM alpine:latest
 
+ENV AZURITE_CONNECTION_STRING=""
+
 # Install necessary certificates
-RUN apk --no-cache add ca-certificates
+# RUN apk --no-cache add ca-certificates
 
 # Set the working directory for the final container
 WORKDIR /root/
